@@ -1,0 +1,26 @@
+# Normalise line endings. C sources and docs may live on any OS; the game
+# itself does not care, but a diff full of ^M does.
+* text=auto eol=lf
+
+# Windows tooling expects CRLF
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# YAML and shell must stay LF or the runners complain
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sh   text eol=lf
+
+# Binary: never touch, never diff
+*.png  binary
+*.ico  binary
+*.MID  binary
+*.ppm  binary
+*.gz   binary
+*.zip  binary
+*.exe  binary
+
+# Generated C is checked for determinism, so its bytes matter
+build/gen/*.c  text eol=lf
+build/gen/*.h  text eol=lf

@@ -1,0 +1,174 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  # ---------------------------------------------------------------- build ----
+  build:
+    name: build DOS executable
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache vendored DJGPP
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/djgpp
+            vendor/csdpmi
+            vendor/unifont.hex.gz
+          key: djgpp-${{ runner.os }}-v1
+
+      - name: Install Pillow
+        run: python -m pip install --quiet pillow
+
+      - name: Fetch DJGPP, CWSDPMI, Unifont
+        run: python tools/setup.py
+
+      - name: Build
+        run: python tools/build.py dos
+
+      - name: Verify the EXE exists and is not a stub
+        shell: pwsh
+        run: |
+          $exe = "dist/GTA6DOS.EXE"
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+          $size = (Get-Item $exe).Length
+          Write-Host "GTA6DOS.EXE = $size bytes"
+          # A DJGPP build of this game is ~400 KB. Anything under 100 KB means
+          # the link silently produced something that will not run.
+          if ($size -lt 100000) { throw "EXE is suspiciously small: $size" }
+          if (-not (Test-Path "dist/CWSDPMI.EXE")) {
+            throw "CWSDPMI.EXE was not copied next to the EXE"
+          }
+          if (-not (Test-Path "dist/RADIO/THEME.MID")) {
+            throw "MIDI radio was not generated"
+          }
+
+      - name: Validate generated MIDI files
+        run: python tools/check_midi.py
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: gta6dos-dist
+          path: dist/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- story ----
+  story:
+    name: story must be completable
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache vendored DJGPP
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/djgpp
+            vendor/csdpmi
+            vendor/unifont.hex.gz
+          key: djgpp-${{ runner.os }}-v1
+
+      - name: Install Pillow
+        run: python -m pip install --quiet pillow
+
+      - name: Fetch DJGPP, CWSDPMI, Unifont
+        run: python tools/setup.py
+
+      - name: Build host binary
+        run: python tools/build.py host
+
+      # This is the only test that really matters: a bot plays the whole
+      # seven-mission story. If it cannot finish, the game is broken.
+      - name: Run the autopilot through the story
+        shell: pwsh
+        run: |
+          $env:GTA_AUTOPILOT = "1"
+          $env:GTA_DUMP_EVERY = "0"
+          $env:GTA_MAX_FRAMES = "120000"
+          $out = & .\build\gta6_host.exe 2>&1
+          $code = $LASTEXITCODE
+          $out | Select-Object -Last 8
+          if ($code -ne 0) { throw "autopilot exited with $code" }
+          if (-not ($out -match "story COMPLETE")) {
+            throw "the autopilot did not finish the story"
+          }
+          if (-not ($out -match "missions completed: 7/7")) {
+            throw "not all seven missions completed"
+          }
+
+      - name: Render every screen
+        run: python tools/screens.py
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: gta6dos-screens
+          path: build/shots/
+          if-no-files-found: error
+
+  # ----------------------------------------------------------------- lint ----
+  generators:
+    name: generators are deterministic
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Pillow
+        run: python -m pip install --quiet pillow
+
+      - name: Cache vendored assets
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/djgpp
+            vendor/csdpmi
+            vendor/unifont.hex.gz
+          key: djgpp-${{ runner.os }}-v1
+
+      - name: Fetch vendor
+        run: python tools/setup.py
+
+      - name: Generate twice, require identical output
+        shell: bash
+        run: |
+          set -e
+          python tools/build.py assets > /dev/null
+          cp -r build/gen build/gen.first
+          python tools/build.py assets > /dev/null
+          if ! diff -r build/gen build/gen.first; then
+            echo "::error::generators are not deterministic"
+            exit 1
+          fi
+          echo "generators are deterministic"
+
+      - name: Check the city is still walkable
+        shell: bash
+        run: |
+          python tools/gencity.py | tee city.log
+          if grep -q "unreachable POI" city.log; then
+            echo "::error::the generator produced a city with an unreachable objective"
+            exit 1
+          fi

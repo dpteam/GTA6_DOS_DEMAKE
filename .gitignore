@@ -1,0 +1,31 @@
+# build products
+build/
+dist/
+
+# vendored toolchain, fetched by tools/setup.py
+vendor/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# generated previews are reproducible: keep the sources, not the output
+docs/preview_*.png
+
+# runtime output from the game itself
+GTA6.SAV
+SHOT*.PPM
+RUNLOG.TXT
+PROBE*.TXT
+*.PPM
+
+# editors and OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
